@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 
 public interface INotificacao
 {
@@ -9,7 +10,8 @@ public enum TipoNotificacao
 {
     Email,
     Sms,
-    Push
+    Push,
+    SmsExterno
 }
 
 public class EmailNotificacao : INotificacao
@@ -36,21 +38,124 @@ public class PushNotificacao : INotificacao
     }
 }
 
+// Adapter
+public class SmsExternoLegado
+{
+    public void SendSms(string numero, string texto)
+    {
+        Console.WriteLine($"(SMS EXTERNO / LEGADO) Enviando para {numero}: {texto}");
+    }
+}
+
+public class SmsExternoAdapter : INotificacao
+{
+    private SmsExternoLegado smsExterno;
+
+    public SmsExternoAdapter(SmsExternoLegado smsExterno)
+    {
+        this.smsExterno = smsExterno;
+    }
+
+    public void Enviar(string destino, string mensagem)
+    {
+        smsExterno.SendSms(destino, mensagem);
+    }
+}
+
+// Proxy
+public class NotificacaoProxy : INotificacao
+{
+    private INotificacao notificacaoReal;
+    private static Dictionary<string, int> tentativasPorDestino = new Dictionary<string, int>();
+
+    public NotificacaoProxy(INotificacao notificacaoReal)
+    {
+        this.notificacaoReal = notificacaoReal;
+    }
+
+    public void Enviar(string destino, string mensagem)
+    {
+        Console.WriteLine("[LOG] Iniciando processo de envio...");
+
+        if (!ValidarPermissao(destino))
+        {
+            Console.WriteLine("[LOG] Envio bloqueado: destino sem permissão.");
+            return;
+        }
+
+        if (!ValidarMensagem(mensagem))
+        {
+            Console.WriteLine("[LOG] Envio bloqueado: mensagem inválida.");
+            return;
+        }
+
+        if (!VerificarLimiteTentativas(destino))
+        {
+            Console.WriteLine("[LOG] Envio bloqueado: limite de tentativas excedido.");
+            return;
+        }
+
+        RegistrarTentativa(destino);
+
+        notificacaoReal.Enviar(destino, mensagem);
+
+        Console.WriteLine("[LOG] Envio realizado com sucesso.");
+    }
+
+    private bool ValidarPermissao(string destino)
+    {
+        return !string.IsNullOrWhiteSpace(destino);
+    }
+
+    private bool ValidarMensagem(string mensagem)
+    {
+        return !string.IsNullOrWhiteSpace(mensagem);
+    }
+
+    private bool VerificarLimiteTentativas(string destino)
+    {
+        ConfiguracaoGlobal config = ConfiguracaoGlobal.GetInstancia();
+
+        if (!tentativasPorDestino.ContainsKey(destino))
+            return true;
+
+        return tentativasPorDestino[destino] < config.MaxTentativasReenvio;
+    }
+
+    private void RegistrarTentativa(string destino)
+    {
+        if (!tentativasPorDestino.ContainsKey(destino))
+            tentativasPorDestino[destino] = 0;
+
+        tentativasPorDestino[destino]++;
+    }
+}
+
 public static class NotificacaoFactory
 {
     public static INotificacao CriarNotificacao(TipoNotificacao tipo)
     {
+        INotificacao notificacaoBase;
+
         switch (tipo)
         {
             case TipoNotificacao.Email:
-                return new EmailNotificacao();
+                notificacaoBase = new EmailNotificacao();
+                break;
             case TipoNotificacao.Sms:
-                return new SmsNotificacao();
+                notificacaoBase = new SmsNotificacao();
+                break;
             case TipoNotificacao.Push:
-                return new PushNotificacao();
+                notificacaoBase = new PushNotificacao();
+                break;
+            case TipoNotificacao.SmsExterno:
+                notificacaoBase = new SmsExternoAdapter(new SmsExternoLegado());
+                break;
             default:
                 throw new ArgumentException("Tipo de notificação inválido.");
         }
+        
+        return new NotificacaoProxy(notificacaoBase);
     }
 }
 
@@ -102,5 +207,8 @@ class Program
 
         INotificacao notificacao3 = NotificacaoFactory.CriarNotificacao(TipoNotificacao.Push);
         notificacao3.Enviar("nome", "Você recebeu uma nova mensagem.");
+
+        INotificacao notificacao4 = NotificacaoFactory.CriarNotificacao(TipoNotificacao.SmsExterno);
+        notificacao4.Enviar("12999999999", "Mensagem enviada pelo serviço legado adaptado.");
     }
 }
